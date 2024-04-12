@@ -1,49 +1,75 @@
 #!/bin/bash
+set -e 
+
 START=$(date +%s)
 
+##### Function definition #####
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo "Options:"
-    echo " -t, --treatment       [REQUIRED] ChIP-seq treatment file(s)"
-    echo " -c, --control         [REQUIRED] ChIP-seq control file(s). Can be previously aligned .bam file with duplicates marked."
+    echo " -t, --treatment       [REQUIRED] ChIP-seq treatment file(s). Must be surrounded by quotations if using wildcards. "
+    echo " -c, --control         [REQUIRED] ChIP-seq control file(s). Can be previously aligned .bam file with duplicates marked. Must be surrounded by quotations if using wildcards."
     echo " -x, --index           [REQUIRED] Bowtie2 index path (without tailing .bt.x)"
     echo " -p, --paired          Run in paired-end mode [default: false]"
     echo " -n, --name            A prefix for output files. By default this is the basename of the first treatment file. "
+    echo " --blacklist           Blacklist regions [.bed file]. Removed from .bam outputs and ignored in peak calling. Chromosome names must match those in INDEX [default: None]"
+    echo " --genome              Required if using --blacklist. TSV format file of chromosome names and sizes. Chromosome names must match those in INDEX. Produced using "
     echo " --keep-intermediates  Whether to retain intermediate alignment files [default: false]"
-    echo " -g | --gsize          Effective genome size for MACS2. Can be a shortcut [mm | hs] or a number [1.0e+9 | 1000000000] [default: mm]"
+    echo " --gsize               Effective genome size for MACS2. Can be a shortcut [mm | hs] or a number [1.0e+9 | 1000000000] [default: hs]"
     echo " -h, --help            Display this help message"
 }
 
 exists() { 
     if ! [[ -e $1 ]]; then 
-        echo "File $1 not found. Exiting."
+        echo "File(s) $1 not found. Exiting."
+        usage
         exit 1
     else 
         echo "Found file $1"
     fi
 }
 
+sort_index() {
+    OUT=$(dirname "$1")/$BNAME.sorted
+    samtools sort -@ 8 -O BAM -o "$OUT.bam" "$1" &&
+    samtools index -@ 8 -bo "$OUT.bai" "$OUT.bam" 
+}
+
+remove_blacklist() { 
+    samtools view -@ 12 --regions-file ChIP2MACS2/.whitelist.bed \
+    -bo "$(dirname "$1").sorted.filtered.bam" "$1"
+}
+
+##### Variable definition #####
 TREATMENT=()
 CONTROL=()
 PAIRED=false
 INDEX=""
 BNAME=""
 KEEP=false
-GSIZE="mm"
+GSIZE="hs"
+BLACKLIST=""
+GENOME=""
 
+if [[ $# -eq 0 ]]; then 
+    usage ;
+    exit 0
+fi
+
+##### Arg parsing #####
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -t | --treatment)
             shift
             for file in $1; do
-                exists $file
+                exists "$file"
                 TREATMENT+=("$file")
             done
-            ;;
+            ;;  
         -c | --control)
             shift
             for file in $1; do
-                exists $file
+                exists "$file"
                 CONTROL+=("$file")
             done
             ;;
@@ -58,7 +84,16 @@ while [[ $# -gt 0 ]]; do
             shift
             BNAME="$1"
             ;;
-        -g | --gsize)
+        --blacklist)
+            shift
+            BLACKLIST="$1"
+            ;;
+        --genome)
+            shift
+            GENOME="$1"
+            ;;
+        --gsize)
+            shift
             GSIZE="$1"
             ;;
         --keep-intermediates)
@@ -77,88 +112,123 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-if [[ -z "$BNAME" ]]; then BNAME="$(basename "$TREATMENT" .fastq.gz )" ; fi 
+if [[ -z "$INDEX" ]]; then 
+    echo "Missing index for alignment." ; 
+    exit 1
+fi 
 
+if [[ -z "$BNAME" ]]; then BNAME="$(basename "${TREATMENT[0]}" .fastq.gz )" ; fi 
+
+# Check if control file is already aligned
 if [[ $file == *.bam ]]; then echo "Control file: $file is already aligned." ; fi 
 
 echo "Paired-end mode: $PAIRED"
 
-if ! [[ "$CONTROL" == *.bam ]]; then mkdir ChIP2MACS2/trimGalore/controls/$BNAME -p ; fi
-mkdir ChIP2MACS2/trimGalore/treatment/$BNAME -p ;
+##### TrimGalore! adapter trimming and QC #####
+if ! [[ "${CONTROL[0]}" == *.bam ]]; then
+    mkdir ChIP2MACS2/trimGalore/controls/"$BNAME" -p
+fi
+mkdir ChIP2MACS2/trimGalore/treatment/"$BNAME" -p
 
 if [[ $PAIRED == true ]]; then
-    if ! [[ "$CONTROL" == *.bam ]]; then trim_galore "${CONTROL[@]}" --paired -o ChIP2MACS2/trimGalore/controls/$BNAME --fastqc -j 6 ;  fi
-    trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/$BNAME --fastqc -j 4 ;
+    trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j 6 &
+    if ! [[ "${CONTROL[0]}" == *.bam ]]; then
+        trim_galore "${CONTROL[@]}" --paired -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j 4 
+    fi &
 else
-    if ! [[ "$CONTROL" == *.bam ]]; then trim_galore "${CONTROL[@]}" -o ChIP2MACS2/trimGalore/controls/$BNAME --fastqc -j 6 ;  fi
-    trim_galore "${TREATMENT[@]}" -o ChIP2MACS2/trimGalore/treatment/$BNAME --fastqc -j 4 ;
+    trim_galore "${TREATMENT[@]}" -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j 6 &
+    if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
+        trim_galore "${CONTROL[@]}" -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j 4  
+    fi & 
 fi
 
-echo "Finished trimming. Aligning trimmed files to $(basename $INDEX)" ; 
+wait
 
-mkdir ChIP2MACS2/bowtie2/controls/$BNAME -p && mkdir ChIP2MACS2/bowtie2/treatment/$BNAME -p ; 
+echo "Finished trimming. Aligning trimmed files to $(basename "$INDEX") " ;
+
+##### Bowtie2 alignment to a reference genome #####
+mkdir ChIP2MACS2/bowtie2/controls/"$BNAME" -p && mkdir ChIP2MACS2/bowtie2/treatment/"$BNAME" -p ; 
 
 if [[ $PAIRED == true ]]; then
-    bowtie2 -x $INDEX -1 ChIP2MACS2/trimGalore/treatment/$BNAME/*1.fq.gz -2 ChIP2MACS2/trimGalore/treatment/$BNAME/*2.fq.gz -p 8 -S ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sam &&
-    echo "Aligned ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sam" &&
-    samtools sort ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sam -O BAM -o ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.bam -@ 8 &&
-    samtools index -bo ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.bai ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.bam -@ 8 &
-    if ! [[ "$CONTROL" == *.bam ]]; then 
-        bowtie2 -x $INDEX -1 ChIP2MACS2/trimGalore/controls/$BNAME/*1.fq.gz -2 ChIP2MACS2/trimGalore/controls/$BNAME/*2.fq.gz -p 8 -S ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sam &&
-        echo "Aligned ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sam" &&
-        samtools sort ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sam -O BAM -o ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.bam -@ 8 &&
-        samtools index -bo ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.bai ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.bam -@ 8 ;
+    bowtie2 -x "$INDEX" -1 ChIP2MACS2/trimGalore/treatment/"$BNAME"/*1.fq.gz -2 ChIP2MACS2/trimGalore/treatment/"$BNAME"/*2.fq.gz -p 8 -S ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sam &&
+    if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
+        bowtie2 -x "$INDEX" -1 ChIP2MACS2/trimGalore/controls/"$BNAME"/*1.fq.gz -2 ChIP2MACS2/trimGalore/controls/"$BNAME"/*2.fq.gz -p 8 -S ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sam
         fi & 
     wait ;
 else
-    bowtie2 -x $INDEX -U ChIP2MACS2/trimGalore/treatment/$BNAME/*.fq.gz -p 8 -S ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sam && 
-    echo "Aligned ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sam" &&
-    samtools sort ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sam -O BAM -o ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.bam -@ 8 &&
-    samtools index -bo ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.bai ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.bam -@ 8 &
-    if ! [[ "$CONTROL" == *.bam ]]; then 
-        bowtie2 -x $INDEX -U ChIP2MACS2/trimGalore/controls/$BNAME/*.fq.gz -p 8 -S ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sam && 
-        echo "Aligned ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sam" &&
-        samtools sort ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sam -O BAM -o ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.bam -@ 8 &&
-        samtools index -bo ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.bai ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.bam -@ 8 ;
+    bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/treatment/"$BNAME"/*.fq.gz -p 8 -S ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam && 
+    if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
+        bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/controls/"$BNAME"/*.fq.gz -p 8 -S ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam 
         fi & 
     wait ;
 fi
 
-if ! [[ "$CONTROL" == *.bam ]]; then mkdir ChIP2MACS2/picard/controls/$BNAME -p ; fi
-mkdir ChIP2MACS2/picard/treatment/$BNAME -p ;  
+sort_index ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam &
+sort_index ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam &
+wait
+
+##### Blacklisted sites are removed #####
+PICARD_IN_T=ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.bam ; 
+if ! [[ "${CONTROL[0]}" == *.bam ]]; then PICARD_IN_C=ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.bam ; fi
+
+if [[ -n $BLACKLIST && -n $GENOME ]]; then
+    exists "$BLACKLIST" ; exists "$GENOME" &&
+    echo "Filtering out blacklisted regions in $BLACKLIST" ; 
+
+    bedtools complement -i "$BLACKLIST" -g "$GENOME" > ChIP2MACS2/.whitelist.bed ;
+
+    remove_blacklist ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sorted.bam &&
+    PICARD_IN_T=ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.filtered.bam & 
+
+    if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
+        remove_blacklist ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sorted.bam && 
+        PICARD_IN_C=ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.filtered.bam ;
+    fi & 
+    wait
+fi 
+
+##### Picard MarkDuplicates to tag duplicate reads in files #####
+if ! [[ "${CONTROL[0]}" == *.bam ]]; then mkdir ChIP2MACS2/picard/controls/"$BNAME" -p ; fi
+mkdir ChIP2MACS2/picard/treatment/"$BNAME" -p ;  
 
 echo "Alignment complete. Marking duplicate reads"
 
-picard MarkDuplicates -I ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.bam --QUIET true \
-    -M ChIP2MACS2/picard/treatment/$BNAME/$BNAME.duplicationMetrics \
-    -O ChIP2MACS2/picard/treatment/$BNAME/$BNAME.deduplicated.bam &&
-samtools index -@ 12 -bo ChIP2MACS2/picard/treatment/$BNAME/$BNAME.deduplicated.bai ChIP2MACS2/picard/treatment/$BNAME/$BNAME.deduplicated.bam & 
+picard MarkDuplicates -I "$PICARD_IN_T" --QUIET true \
+    -M ChIP2MACS2/picard/treatment/"$BNAME"/"$BNAME".duplicationMetrics \
+    -O ChIP2MACS2/picard/treatment/"$BNAME"/"$BNAME".deduplicated.bam &&
+sort_index ChIP2MACS2/picard/treatment/"$BNAME"/"$BNAME".deduplicated.bam &
 
-if ! [[ "$CONTROL" == *.bam ]]; then 
-    picard MarkDuplicates -I ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.bam --QUIET true \
-        -M ChIP2MACS2/picard/controls/$BNAME/$BNAME.duplicationMetrics \
-        -O ChIP2MACS2/picard/controls/$BNAME/$BNAME.deduplicated.bam &&
-    samtools index -@ 12 -bo ChIP2MACS2/picard/controls/$BNAME/$BNAME.deduplicated.bai ChIP2MACS2/picard/controls/$BNAME/$BNAME.deduplicated.bam
+if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
+    picard MarkDuplicates -I "$PICARD_IN_C" --QUIET true \
+        -M ChIP2MACS2/picard/controls/"$BNAME"/"$BNAME".duplicationMetrics \
+        -O ChIP2MACS2/picard/controls/"$BNAME"/"$BNAME".deduplicated.bam &&
+    sort_index ChIP2MACS2/picard/controls/"$BNAME"/"$BNAME".deduplicated.bam ; 
 fi & 
 wait 
+
+##### [OPTIONAL] Removal of intermediate files #####
 if [[ $KEEP == false ]]; then 
     echo "Removing intermediate files:" ;
-    for file in ChIP2MACS2/bowtie2/*/$BNAME/* ; do
+    for file in ChIP2MACS2/bowtie2/*/"$BNAME"/* ; do
         echo "$file" ;
         rm -r "$file" ; 
     done
-    rmdir ChIP2MACS2/bowtie2/*/$BNAME ;
+    rm -r ChIP2MACS2/bowtie2/*/"$BNAME" ;
 fi 
 
+##### MACS2 to call ChIP-seq peaks #####
 mkdir ChIP2MACS2/MACS2/ -p ;
 
-if ! [[ "$CONTROL" == *.bam ]]; then 
-    CONTROL=ChIP2MACS2/picard/controls/$BNAME/$BNAME.deduplicated.bam ; 
+if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
+    MACS2_INPUT="ChIP2MACS2/picard/controls/$BNAME/$BNAME.deduplicated.bam" ; 
+else 
+    MACS2_INPUT="${CONTROL[0]}"
 fi
 
-macs2 callpeak -t ChIP2MACS2/picard/treatment/$BNAME/$BNAME.deduplicated.bam -c "$CONTROL" \
-    -g $GSIZE --outdir ChIP2MACS2/MACS2/ -n $BNAME --call-summits ;
+macs2 callpeak -t ChIP2MACS2/picard/treatment/"$BNAME"/"$BNAME".deduplicated.bam -c "$MACS2_INPUT" \
+    -g "$GSIZE" --outdir ChIP2MACS2/MACS2/ -n "$BNAME" --call-summits ;
 
+##### End of script #####
 END=$(date +%s)
 
 echo "Done. Time elapsed: $(( END-START )) seconds" ; 
