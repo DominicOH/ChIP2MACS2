@@ -16,6 +16,7 @@ usage() {
     echo " --genome              Required if using --blacklist. TSV format file of chromosome names and sizes. Chromosome names must match those in INDEX. Produced using "
     echo " --keep-intermediates  Whether to retain intermediate alignment files [default: false]"
     echo " --gsize               Effective genome size for MACS2. Can be a shortcut [mm | hs] or a number [1.0e+9 | 1000000000] [default: hs]"
+    echo " --cores [INT]         Total number of cores to use across commands"
     echo " -h, --help            Display this help message"
 }
 
@@ -30,13 +31,16 @@ exists() {
 }
 
 sort_index() {
+    # Cores halved given parallel execution
+    SORT_CORES=$(( CORES/2 ))
     OUT=$(dirname "$1")/$BNAME.sorted
-    samtools sort -@ 8 -O BAM -o "$OUT.bam" "$1" &&
-    samtools index -@ 8 -bo "$OUT.bai" "$OUT.bam" 
+    samtools sort -@ $"$SORT_CORES" -O BAM -o "$OUT.bam" "$1" &&
+    samtools index -@ $"$SORT_CORES" -bo "$OUT.bai" "$OUT.bam" 
 }
 
 remove_blacklist() { 
-    samtools view -@ 12 --regions-file ChIP2MACS2/.whitelist.bed \
+    SORT_CORES=$(( CORES/2 ))
+    samtools view -@ "$SORT_CORES" --regions-file ChIP2MACS2/.whitelist.bed \
     -bo "$(dirname "$1").sorted.filtered.bam" "$1"
 }
 
@@ -50,6 +54,7 @@ KEEP=false
 GSIZE="hs"
 BLACKLIST=""
 GENOME=""
+CORES=4
 
 if [[ $# -eq 0 ]]; then 
     usage ;
@@ -99,6 +104,10 @@ while [[ $# -gt 0 ]]; do
         --keep-intermediates)
             KEEP=true
             ;;
+        --cores)
+            shift
+            CORES="$1"
+            ;;
         -h | --help)
             usage
             exit 0
@@ -130,16 +139,23 @@ if ! [[ "${CONTROL[0]}" == *.bam ]]; then
 fi
 mkdir ChIP2MACS2/trimGalore/treatment/"$BNAME" -p
 
-if [[ $PAIRED == true ]]; then
-    trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j 6 &
+# Actual core usage of trim_galore is ~4x greater than input, so core usage is reduced here
+# See TrimGalore! "Actual core usage" in trim_galore documentation for more
+if [[ $CORES -gt 4 ]]; 
+    then TRIM_CORES=$(( CORES / 4 ))  
+fi
+
+if [[ $PAIRED == true && "${CONTROL[0]}" != *.bam ]]; then
+    trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES" &&
+
     if ! [[ "${CONTROL[0]}" == *.bam ]]; then
-        trim_galore "${CONTROL[@]}" --paired -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j 4 
-    fi &
+        trim_galore "${CONTROL[@]}" --paired -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j "$TRIM_CORES" 
+    fi
 else
-    trim_galore "${TREATMENT[@]}" -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j 6 &
+    trim_galore "${TREATMENT[@]}" -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES" &&
     if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
-        trim_galore "${CONTROL[@]}" -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j 4  
-    fi & 
+        trim_galore "${CONTROL[@]}" -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j "$TRIM_CORES"  
+    fi 
 fi
 
 wait
@@ -150,15 +166,15 @@ echo "Finished trimming. Aligning trimmed files to $(basename "$INDEX") " ;
 mkdir ChIP2MACS2/bowtie2/controls/"$BNAME" -p && mkdir ChIP2MACS2/bowtie2/treatment/"$BNAME" -p ; 
 
 if [[ $PAIRED == true ]]; then
-    bowtie2 -x "$INDEX" -1 ChIP2MACS2/trimGalore/treatment/"$BNAME"/*1.fq.gz -2 ChIP2MACS2/trimGalore/treatment/"$BNAME"/*2.fq.gz -p 8 -S ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sam &&
+    bowtie2 -x "$INDEX" -1 ChIP2MACS2/trimGalore/treatment/"$BNAME"/*1.fq.gz -2 ChIP2MACS2/trimGalore/treatment/"$BNAME"/*2.fq.gz -p "$CORES" -S ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam &&
     if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
-        bowtie2 -x "$INDEX" -1 ChIP2MACS2/trimGalore/controls/"$BNAME"/*1.fq.gz -2 ChIP2MACS2/trimGalore/controls/"$BNAME"/*2.fq.gz -p 8 -S ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sam
+        bowtie2 -x "$INDEX" -1 ChIP2MACS2/trimGalore/controls/"$BNAME"/*1.fq.gz -2 ChIP2MACS2/trimGalore/controls/"$BNAME"/*2.fq.gz -p "$CORES" -S ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam
         fi & 
     wait ;
 else
-    bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/treatment/"$BNAME"/*.fq.gz -p 8 -S ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam && 
+    bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/treatment/"$BNAME"/*.fq.gz -p "$CORES" -S ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam && 
     if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
-        bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/controls/"$BNAME"/*.fq.gz -p 8 -S ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam 
+        bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/controls/"$BNAME"/*.fq.gz -p "$CORES" -S ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam 
         fi & 
     wait ;
 fi
