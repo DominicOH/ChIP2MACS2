@@ -145,20 +145,17 @@ if [[ $CORES -gt 4 ]];
     then TRIM_CORES=$(( CORES / 4 ))  
 fi
 
-if [[ $PAIRED == true && "${CONTROL[0]}" != *.bam ]]; then
-    trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES" &&
+if [[ $PAIRED == true ]]; then 
+    trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES"
+else 
+    trim_galore "${TREATMENT[@]}" -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES"
+fi &&
 
-    if ! [[ "${CONTROL[0]}" == *.bam ]]; then
-        trim_galore "${CONTROL[@]}" --paired -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j "$TRIM_CORES" 
-    fi
-else
-    trim_galore "${TREATMENT[@]}" -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES" &&
-    if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
-        trim_galore "${CONTROL[@]}" -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j "$TRIM_CORES"  
-    fi 
-fi
-
-wait
+if [[ $PAIRED == true && "${CONTROL[0]}" != *.bam ]]; then 
+    trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES" 
+elif [[ "${CONTROL[0]}" != *.bam ]]; then 
+    trim_galore "${CONTROL[@]}" -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j "$TRIM_CORES"  
+fi 
 
 echo "Finished trimming. Aligning trimmed files to $(basename "$INDEX") " ;
 
