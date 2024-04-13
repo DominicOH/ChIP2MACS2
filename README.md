@@ -8,6 +8,7 @@ This repository contains a short shell pipeline to simplify peak calling from Ch
 4. MACS2 is then used to call peaks
 
 ## References
+- ANDREWS, S. 2010. FastQC:  A Quality Control Tool for High Throughput Sequence Data.
 - BROAD INSTITUTE 2014. picard. 3.1.1 ed.
 - DANECEK, P., BONFIELD, J. K., LIDDLE, J., MARSHALL, J., OHAN, V., POLLARD, M. O., WHITWHAM, A., KEANE, T., MCCARTHY, S. A., DAVIES, R. M. & LI, H. 2021. Twelve years of SAMtools and BCFtools. GigaScience, 10.
 - KRUEGER, F. & ANDREWS, S. R. 2011. Bismark: a flexible aligner and methylation caller for Bisulfite-Seq applications. Bioinformatics, 27, 1571-1572.
