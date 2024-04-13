@@ -41,7 +41,7 @@ sort_index() {
 remove_blacklist() { 
     SORT_CORES=$(( CORES/2 ))
     samtools view -@ "$SORT_CORES" --regions-file ChIP2MACS2/.whitelist.bed \
-    -bo "$(dirname "$1").sorted.filtered.bam" "$1"
+    -bo "$(dirname "$1")/$BNAME/$BNAME.sorted.filtered.bam" "$1"
 }
 
 ##### Variable definition #####
