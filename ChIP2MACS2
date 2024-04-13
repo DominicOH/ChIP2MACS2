@@ -149,11 +149,11 @@ if [[ $PAIRED == true ]]; then
     trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES"
 else 
     trim_galore "${TREATMENT[@]}" -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES"
-fi &&
+fi
 
 if [[ $PAIRED == true && "${CONTROL[0]}" != *.bam ]]; then 
     trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES" 
-elif [[ "${CONTROL[0]}" != *.bam ]]; then 
+elif [[ "${CONTROL[0]}" != *.bam && $PAIRED == false ]]; then 
     trim_galore "${CONTROL[@]}" -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j "$TRIM_CORES"  
 fi 
 
@@ -161,19 +161,24 @@ echo "Finished trimming. Aligning trimmed files to $(basename "$INDEX") " ;
 
 ##### Bowtie2 alignment to a reference genome #####
 mkdir ChIP2MACS2/bowtie2/controls/"$BNAME" -p && mkdir ChIP2MACS2/bowtie2/treatment/"$BNAME" -p ; 
+mkdir ChIP2MACS2/logs -p 
 
 if [[ $PAIRED == true ]]; then
-    bowtie2 -x "$INDEX" -1 ChIP2MACS2/trimGalore/treatment/"$BNAME"/*1.fq.gz -2 ChIP2MACS2/trimGalore/treatment/"$BNAME"/*2.fq.gz -p "$CORES" -S ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam &&
-    if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
-        bowtie2 -x "$INDEX" -1 ChIP2MACS2/trimGalore/controls/"$BNAME"/*1.fq.gz -2 ChIP2MACS2/trimGalore/controls/"$BNAME"/*2.fq.gz -p "$CORES" -S ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam
-        fi & 
-    wait ;
+    (bowtie2 -x "$INDEX" -1 ChIP2MACS2/trimGalore/treatment/"$BNAME"/*1.fq.gz \
+    -2 ChIP2MACS2/trimGalore/treatment/"$BNAME"/*2.fq.gz -p "$CORES" \
+    -S ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam) 2> ChIP2MACS2/logs/"$BNAME"_treatment_bowtie2.log
 else
-    bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/treatment/"$BNAME"/*.fq.gz -p "$CORES" -S ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam && 
-    if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
-        bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/controls/"$BNAME"/*.fq.gz -p "$CORES" -S ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam 
-        fi & 
-    wait ;
+    (bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/treatment/"$BNAME"/*.fq.gz -p "$CORES" \
+    -S ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam) 2> ChIP2MACS2/logs/"$BNAME"_treatment_bowtie2.log
+fi
+
+if [[ $PAIRED == true && "${CONTROL[0]}" != *.bam ]]; then 
+    (bowtie2 -x "$INDEX" -1 ChIP2MACS2/trimGalore/controls/"$BNAME"/*1.fq.gz \
+    -2 ChIP2MACS2/trimGalore/controls/"$BNAME"/*2.fq.gz -p "$CORES" \
+    -S ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam) 2> ChIP2MACS2/logs/"$BNAME"_control_bowtie2.log
+elif [[ "${CONTROL[0]}" != *.bam && $PAIRED == false ]]; then 
+    (bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/treatment/"$BNAME"/*.fq.gz -p "$CORES" \
+    -S ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam) 2> ChIP2MACS2/logs/"$BNAME"_control_bowtie2.log
 fi
 
 sort_index ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam &
