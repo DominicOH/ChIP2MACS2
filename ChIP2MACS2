@@ -138,7 +138,7 @@ fi
 if [[ -z "$BNAME" ]]; then BNAME="$(basename "${TREATMENT[0]}" .fastq.gz )" ; fi 
 
 # Check if control file is already aligned
-if [[ $NOCONTROL == false && "${CONTROL[0]}" != *.bam ]]; then echo "Control file: $file is already aligned." ; fi 
+if [[ $NOCONTROL == false && "${CONTROL[0]}" == *.bam ]]; then echo "Control file: $file is already aligned." ; fi 
 
 echo "Paired-end mode: $PAIRED"
 
@@ -157,15 +157,21 @@ fi
 echo "Running trim_galore with $TRIM_CORES cores" 
 
 if [[ $PAIRED == true ]]; then 
-    trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES" --gzip # --suppress_warn
+    trim_galore "${TREATMENT[@]}" --paired \
+    -o ChIP2MACS2/trimGalore/treatment/"$BNAME" \
+    --fastqc -j "$TRIM_CORES" --gzip ;
 else 
-    trim_galore "${TREATMENT[@]}" -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES" --gzip # --suppress_warn
+    trim_galore "${TREATMENT[@]}" -o ChIP2MACS2/trimGalore/treatment/"$BNAME" \
+    --fastqc -j "$TRIM_CORES" --gzip ;
 fi
 
 if [[ $NOCONTROL == false && $PAIRED == true && "${CONTROL[0]}" != *.bam ]]; then 
-    trim_galore "${CONTROL[@]}" --paired -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j "$TRIM_CORES" --gzip # --suppress_warn
+    trim_galore "${CONTROL[@]}" --paired \
+    -o ChIP2MACS2/trimGalore/controls/"$BNAME" \
+    --fastqc -j "$TRIM_CORES" --gzip ;
 elif [[ $NOCONTROL == false && "${CONTROL[0]}" != *.bam ]]; then 
-    trim_galore "${CONTROL[@]}" -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j "$TRIM_CORES" --gzip # --suppress_warn
+    trim_galore "${CONTROL[@]}" -o ChIP2MACS2/trimGalore/controls/"$BNAME"  \
+    -fastqc -j "$TRIM_CORES" --gzip ;
 fi 
 
 echo "Finished trimming. Aligning trimmed files to $(basename "$INDEX") " ;
