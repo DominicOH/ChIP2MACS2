@@ -7,15 +7,16 @@ START=$(date +%s)
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo "Options:"
-    echo " -t, --treatment       [REQUIRED] ChIP-seq treatment file(s). Must be surrounded by quotations if using wildcards. "
-    echo " -c, --control         [REQUIRED] ChIP-seq control file(s). Can be previously aligned .bam file with duplicates marked. Must be surrounded by quotations if using wildcards."
+    echo " -t, --treatment       [REQUIRED] ChIP-seq treatment file(s). Must be surrounded by quotations if using wildcards"
+    echo " -c, --control         ChIP-seq control file(s). Can be previously aligned .bam file with duplicates marked. Must be surrounded by quotations if using wildcards"
     echo " -x, --index           [REQUIRED] Bowtie2 index path (without tailing .bt.x)"
     echo " -p, --paired          Run in paired-end mode [default: false]"
-    echo " -n, --name            A prefix for output files. By default this is the basename of the first treatment file. "
+    echo " -n, --name            A prefix for output files. By default this is the basename of the first treatment file"
+    echo " --gsize               Effective genome size for MACS2. Can be a shortcut [mm | hs] or a number [1.0e+9 | 1000000000] [default: hs]"
     echo " --blacklist           Blacklist regions [.bed file]. Removed from .bam outputs and ignored in peak calling. Chromosome names must match those in INDEX [default: None]"
     echo " --genome              Required if using --blacklist. TSV format file of chromosome names and sizes. Chromosome names must match those in INDEX. Produced using "
     echo " --keep-intermediates  Whether to retain intermediate alignment files [default: false]"
-    echo " --gsize               Effective genome size for MACS2. Can be a shortcut [mm | hs] or a number [1.0e+9 | 1000000000] [default: hs]"
+    echo " --no-control          Pass to run MACS2 without a control/background dataset"
     echo " --cores [INT]         Total number of cores to use across commands"
     echo " -h, --help            Display this help message"
 }
@@ -54,6 +55,7 @@ KEEP=false
 GSIZE="hs"
 BLACKLIST=""
 GENOME=""
+NOCONTROL=false
 CORES=4
 
 if [[ $# -eq 0 ]]; then 
@@ -71,12 +73,17 @@ while [[ $# -gt 0 ]]; do
                 TREATMENT+=("$file")
             done
             ;;  
+        --no-control)
+            NOCONTROL=true
+            ;;   
         -c | --control)
             shift
-            for file in $1; do
-                exists "$file"
-                CONTROL+=("$file")
-            done
+            if [[ $NOCONTROL == false ]]; then 
+                for file in $1; do
+                    exists "$file"
+                    CONTROL+=("$file")
+                done
+            fi
             ;;
         -x | --index)
             shift
@@ -129,12 +136,12 @@ fi
 if [[ -z "$BNAME" ]]; then BNAME="$(basename "${TREATMENT[0]}" .fastq.gz )" ; fi 
 
 # Check if control file is already aligned
-if [[ $file == *.bam ]]; then echo "Control file: $file is already aligned." ; fi 
+if [[ $NOCONTROL == false && "${CONTROL[0]}" != *.bam ]]; then echo "Control file: $file is already aligned." ; fi 
 
 echo "Paired-end mode: $PAIRED"
 
 ##### TrimGalore! adapter trimming and QC #####
-if ! [[ "${CONTROL[0]}" == *.bam ]]; then
+if [[ "${CONTROL[0]}" != *.bam || $NOCONTROL == false ]]; then
     mkdir ChIP2MACS2/trimGalore/controls/"$BNAME" -p
 fi
 mkdir ChIP2MACS2/trimGalore/treatment/"$BNAME" -p
@@ -145,22 +152,25 @@ if [[ $CORES -gt 4 ]];
     then TRIM_CORES=$(( CORES / 4 ))  
 fi
 
+echo "Running trim_galore with $TRIM_CORES cores" 
+
 if [[ $PAIRED == true ]]; then 
-    trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES"
+    trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES" --gzip # --suppress_warn
 else 
-    trim_galore "${TREATMENT[@]}" -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES"
+    trim_galore "${TREATMENT[@]}" -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES" --gzip # --suppress_warn
 fi
 
-if [[ $PAIRED == true && "${CONTROL[0]}" != *.bam ]]; then 
-    trim_galore "${TREATMENT[@]}" --paired -o ChIP2MACS2/trimGalore/treatment/"$BNAME" --fastqc -j "$TRIM_CORES" 
-elif [[ "${CONTROL[0]}" != *.bam && $PAIRED == false ]]; then 
-    trim_galore "${CONTROL[@]}" -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j "$TRIM_CORES"  
+if [[ $NOCONTROL == false && $PAIRED == true && "${CONTROL[0]}" != *.bam ]]; then 
+    trim_galore "${CONTROL[@]}" --paired -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j "$TRIM_CORES" --gzip # --suppress_warn
+elif [[ $NOCONTROL == false && "${CONTROL[0]}" != *.bam ]]; then 
+    trim_galore "${CONTROL[@]}" -o ChIP2MACS2/trimGalore/controls/"$BNAME" --fastqc -j "$TRIM_CORES" --gzip # --suppress_warn
 fi 
 
 echo "Finished trimming. Aligning trimmed files to $(basename "$INDEX") " ;
 
 ##### Bowtie2 alignment to a reference genome #####
-mkdir ChIP2MACS2/bowtie2/controls/"$BNAME" -p && mkdir ChIP2MACS2/bowtie2/treatment/"$BNAME" -p ; 
+if [[ "${CONTROL[0]}" != *.bam || $NOCONTROL == false ]]; then mkdir ChIP2MACS2/bowtie2/controls/"$BNAME" -p ; fi
+mkdir ChIP2MACS2/bowtie2/treatment/"$BNAME" -p ; 
 mkdir ChIP2MACS2/logs -p 
 
 if [[ $PAIRED == true ]]; then
@@ -172,22 +182,22 @@ else
     -S ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam) 2> ChIP2MACS2/logs/"$BNAME"_treatment_bowtie2.log
 fi
 
-if [[ $PAIRED == true && "${CONTROL[0]}" != *.bam ]]; then 
+if [[ $PAIRED == true && "${CONTROL[0]}" != *.bam && $NOCONTROL == false ]]; then 
     (bowtie2 -x "$INDEX" -1 ChIP2MACS2/trimGalore/controls/"$BNAME"/*1.fq.gz \
     -2 ChIP2MACS2/trimGalore/controls/"$BNAME"/*2.fq.gz -p "$CORES" \
     -S ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam) 2> ChIP2MACS2/logs/"$BNAME"_control_bowtie2.log
-elif [[ "${CONTROL[0]}" != *.bam && $PAIRED == false ]]; then 
-    (bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/treatment/"$BNAME"/*.fq.gz -p "$CORES" \
-    -S ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam) 2> ChIP2MACS2/logs/"$BNAME"_control_bowtie2.log
+elif [[ "${CONTROL[0]}" != *.bam && $PAIRED == false && $NOCONTROL == false ]]; then 
+    (bowtie2 -x "$INDEX" -U ChIP2MACS2/trimGalore/controls/"$BNAME"/*.fq.gz -p "$CORES" \
+    -S ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam) 2> ChIP2MACS2/logs/"$BNAME"_control_bowtie2.log
 fi
 
 sort_index ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sam &
-sort_index ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam &
+if [[ $NOCONTROL == false ]]; then sort_index ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sam ; fi &
 wait
 
 ##### Blacklisted sites are removed #####
 PICARD_IN_T=ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.bam ; 
-if ! [[ "${CONTROL[0]}" == *.bam ]]; then PICARD_IN_C=ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.bam ; fi
+if [[ "${CONTROL[0]}" != *.bam && $NOCONTROL == false ]]; then PICARD_IN_C=ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.bam ; fi
 
 if [[ -n $BLACKLIST && -n $GENOME ]]; then
     exists "$BLACKLIST" ; exists "$GENOME" &&
@@ -198,7 +208,7 @@ if [[ -n $BLACKLIST && -n $GENOME ]]; then
     remove_blacklist ChIP2MACS2/bowtie2/treatment/"$BNAME"/"$BNAME".sorted.bam &&
     PICARD_IN_T=ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.filtered.bam & 
 
-    if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
+    if [[ "${CONTROL[0]}" != *.bam && $NOCONTROL == false ]]; then 
         remove_blacklist ChIP2MACS2/bowtie2/controls/"$BNAME"/"$BNAME".sorted.bam && 
         PICARD_IN_C=ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.filtered.bam ;
     fi & 
@@ -206,7 +216,7 @@ if [[ -n $BLACKLIST && -n $GENOME ]]; then
 fi 
 
 ##### Picard MarkDuplicates to tag duplicate reads in files #####
-if ! [[ "${CONTROL[0]}" == *.bam ]]; then mkdir ChIP2MACS2/picard/controls/"$BNAME" -p ; fi
+if [[ "${CONTROL[0]}" != *.bam && $NOCONTROL == false ]]; then mkdir ChIP2MACS2/picard/controls/"$BNAME" -p ; fi
 mkdir ChIP2MACS2/picard/treatment/"$BNAME" -p ;  
 
 echo "Alignment complete. Marking duplicate reads"
@@ -216,7 +226,7 @@ picard MarkDuplicates -I "$PICARD_IN_T" --QUIET true \
     -O ChIP2MACS2/picard/treatment/"$BNAME"/"$BNAME".deduplicated.bam &&
 sort_index ChIP2MACS2/picard/treatment/"$BNAME"/"$BNAME".deduplicated.bam &
 
-if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
+if [[ "${CONTROL[0]}" != *.bam && $NOCONTROL == false ]]; then 
     picard MarkDuplicates -I "$PICARD_IN_C" --QUIET true \
         -M ChIP2MACS2/picard/controls/"$BNAME"/"$BNAME".duplicationMetrics \
         -O ChIP2MACS2/picard/controls/"$BNAME"/"$BNAME".deduplicated.bam &&
@@ -237,14 +247,18 @@ fi
 ##### MACS2 to call ChIP-seq peaks #####
 mkdir ChIP2MACS2/MACS2/ -p ;
 
-if ! [[ "${CONTROL[0]}" == *.bam ]]; then 
+if [[ "${CONTROL[0]}" != *.bam && $NOCONTROL == false ]]; then 
     MACS2_INPUT="ChIP2MACS2/picard/controls/$BNAME/$BNAME.deduplicated.bam" ; 
-else 
-    MACS2_INPUT="${CONTROL[0]}"
+elif [[ "${CONTROL[0]}" == *.bam ]]; then MACS2_INPUT="${CONTROL[0]}" 
 fi
 
-macs2 callpeak -t ChIP2MACS2/picard/treatment/"$BNAME"/"$BNAME".deduplicated.bam -c "$MACS2_INPUT" \
-    -g "$GSIZE" --outdir ChIP2MACS2/MACS2/ -n "$BNAME" --call-summits ;
+if [[ $NOCONTROL == false ]]; then 
+    macs2 callpeak -t ChIP2MACS2/picard/treatment/"$BNAME"/"$BNAME".deduplicated.bam -c "$MACS2_INPUT" \
+        -g "$GSIZE" --outdir ChIP2MACS2/MACS2/ -n "$BNAME" --call-summits ;
+else 
+    macs2 callpeak -t ChIP2MACS2/picard/treatment/"$BNAME"/"$BNAME".deduplicated.bam \
+        -g "$GSIZE" --outdir ChIP2MACS2/MACS2/ -n "$BNAME" --call-summits ;
+fi
 
 ##### End of script #####
 END=$(date +%s)
