@@ -98,10 +98,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         --blacklist)
             shift
+            exists "$1"
             BLACKLIST="$1"
             ;;
         --genome)
             shift
+            exists "$1"
             GENOME="$1"
             ;;
         --gsize)
@@ -200,7 +202,6 @@ PICARD_IN_T=ChIP2MACS2/bowtie2/treatment/$BNAME/$BNAME.sorted.bam ;
 if [[ "${CONTROL[0]}" != *.bam && $NOCONTROL == false ]]; then PICARD_IN_C=ChIP2MACS2/bowtie2/controls/$BNAME/$BNAME.sorted.bam ; fi
 
 if [[ -n $BLACKLIST && -n $GENOME ]]; then
-    exists "$BLACKLIST" ; exists "$GENOME" &&
     echo "Filtering out blacklisted regions in $BLACKLIST" ; 
 
     bedtools complement -i "$BLACKLIST" -g "$GENOME" > ChIP2MACS2/.whitelist.bed ;
