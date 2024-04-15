@@ -7,6 +7,23 @@ This repository contains a short shell pipeline to simplify peak calling from Ch
 3. picard MarkDuplicates is used to mark duplicate reads in the sequence output 
 4. MACS2 is then used to call peaks
 
+## Usage 
+Clone the repository to your intended destination: 
+
+`git clone https://github.com/DominicOH/ChIP2MACS2.git`
+
+Define a conda environment of required packages using the included `environment.yaml` file. 
+
+`conda env create -f environment.yaml`
+
+Note: due to conflicting samtools versions (required `samtools >= 1.19.2`) required for this package and MACS2, you may need to explicitly upgrade samtools to correct version.
+
+Add the ChIP2MACS2 script to your path. From there, basic usage is (ensure input files are enclosed by "" if using wildcard characters):
+
+`ChIP2MACS2 -t <treatment_file(s).fq> -c <control_or_input_files(s).fq> -x <bowtie2_index_prefix>`
+
+Additional options enable the use of paired-end sequence files (`--paired`) and the inclusion of a BED-format blacklist file to remove unwanted regions (`--blacklist <bed>`). Using `--blacklist` requires the setting of a chromosome sizes file (`--genome <genome.chrom.sizes>`), like those downloadable from UCSC or produced using `samtools faidx`. Note: the included blacklist file must be sorted in the same order as the genome file. 
+
 ## References
 - ANDREWS, S. 2010. FastQC:  A Quality Control Tool for High Throughput Sequence Data.
 - BROAD INSTITUTE 2014. picard. 3.1.1 ed.
