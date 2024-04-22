@@ -1,4 +1,4 @@
-name: ChIP2MACS2
+name: /mnt/data1/doh28/tools/condas/ChIP2MACS2
 channels:
   - bioconda
   - conda-forge
@@ -10,3 +10,5 @@ dependencies:
   - samtools
   - macs2
   - numpy
+  - bedtools
+prefix: /mnt/data1/doh28/tools/condas/ChIP2MACS2
