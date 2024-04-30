@@ -10,9 +10,11 @@ This repository contains a short shell pipeline to simplify peak calling from Ch
 ## Usage 
 Clone the repository to your intended destination and turn it into an executable: 
 
-`git clone https://github.com/DominicOH/ChIP2MACS2.git`
-`cd ChIP2MACS2` 
-`chmod +x ChIP2MACS2`
+```
+git clone https://github.com/DominicOH/ChIP2MACS2.git
+cd ChIP2MACS2
+chmod +x ChIP2MACS2
+```
 
 Define a conda environment of required packages using the included `environment.yaml` file. 
 
