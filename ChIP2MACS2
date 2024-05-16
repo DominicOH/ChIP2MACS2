@@ -21,6 +21,13 @@ usage() {
     echo " -h, --help            Display this help message"
 }
 
+startup_check() {
+    if ! command -v $1 ; then 
+        echo "$1 not found. Check environment."
+        exit 1
+    fi
+}
+
 exists() { 
     if ! [[ -e $1 ]]; then 
         echo "File(s) $1 not found. Exiting."
@@ -32,17 +39,14 @@ exists() {
 }
 
 sort_and_index() {
-    # Cores halved given parallel execution
-    SORT_CORES=$(( CORES/2 ))
     OUT=$(dirname "$1")/$BNAME.sorted
-    samtools sort -@ $"$SORT_CORES" -O BAM -o "$OUT.bam" "$1" &&
-    samtools index -@ $"$SORT_CORES" -bo "$OUT.bai" "$OUT.bam" 
+    samtools sort -@ $"$CORES" -O BAM -o "$OUT.bam" "$1" &&
+    samtools index -@ $"$CORES" -bo "$OUT.bai" "$OUT.bam" 
 }
 
 remove_blacklist() { 
-    SORT_CORES=$(( CORES/2 ))
-    samtools view -@ "$SORT_CORES" --regions-file ChIP2MACS2/."$BNAME".whitelist.bed \
-    -bo "$(dirname "$1")/$BNAME.sorted.filtered.bam" "$1"
+    OUT=$(dirname "$1")/$BNAME.filtered.bam
+    bedtools intersect -a $1 -b $BLACKLIST -v > $OUT
 }
 
 ##### Variable definition #####
@@ -62,6 +66,10 @@ if [[ $# -eq 0 ]]; then
     usage ;
     exit 0
 fi
+
+for tool in trim_galore bowtie2 samtools picard macs2 bedtools ; do
+    startup_check $tool ;
+done
 
 ##### Arg parsing #####
 while [[ $# -gt 0 ]]; do
@@ -205,27 +213,23 @@ fi
 
 if [[ $NOCONTROL == false && "${CONTROL[0]}" != *.bam ]]; then echo "Aligned control files saved as ChIP2MACS2/$BNAME/bowtie2/controls/$BNAME.sam " ; fi
 
-sort_and_index ChIP2MACS2/"$BNAME"/bowtie2/controls/"$BNAME".sam &
-if [[ $NOCONTROL == false ]]; then sort_and_index ChIP2MACS2/"$BNAME"/bowtie2/controls/"$BNAME".sam ; fi &
-wait
+sort_and_index ChIP2MACS2/"$BNAME"/bowtie2/treatment/"$BNAME".sam
+if [[ $NOCONTROL == false ]]; then sort_and_index ChIP2MACS2/"$BNAME"/bowtie2/controls/"$BNAME".sam ; fi
 
 ##### Blacklisted sites are removed #####
-PICARD_IN_T=ChIP2MACS2/"$BNAME"/bowtie2/controls/"$BNAME".sorted.bam ; 
+PICARD_IN_T=ChIP2MACS2/"$BNAME"/bowtie2/treatment/"$BNAME".sorted.bam ; 
 if [[ "${CONTROL[0]}" != *.bam && $NOCONTROL == false ]]; then PICARD_IN_C=ChIP2MACS2/"$BNAME"/bowtie2/controls/"$BNAME".sorted.bam ; fi
 
 if [[ -n $BLACKLIST && -n $GENOME ]]; then
     echo "Filtering out blacklisted regions in $BLACKLIST" ; 
 
-    bedtools complement -i "$BLACKLIST" -g "$GENOME" > ChIP2MACS2/."$BNAME".whitelist.bed ;
-
-    remove_blacklist ChIP2MACS2/"$BNAME"/bowtie2/treatment/"$BNAME".sorted.bam &&
-    PICARD_IN_T=ChIP2MACS2/"$BNAME"/bowtie2/treatment/$BNAME.sorted.filtered.bam & 
+    remove_blacklist ChIP2MACS2/"$BNAME"/bowtie2/treatment/"$BNAME".sorted.bam
+    PICARD_IN_T=ChIP2MACS2/"$BNAME"/bowtie2/treatment/$BNAME.filtered.bam
 
     if [[ "${CONTROL[0]}" != *.bam && $NOCONTROL == false ]]; then 
-        remove_blacklist ChIP2MACS2/"$BNAME"/bowtie2/controls/"$BNAME".sorted.bam && 
-        PICARD_IN_C=ChIP2MACS2/"$BNAME"/bowtie2/controls/"$BNAME".sorted.filtered.bam ;
-    fi & 
-    wait
+        remove_blacklist ChIP2MACS2/"$BNAME"/bowtie2/controls/"$BNAME".sorted.bam 
+        PICARD_IN_C=ChIP2MACS2/"$BNAME"/bowtie2/controls/$BNAME.filtered.bam ;
+    fi
 fi 
 
 ##### Picard MarkDuplicates to tag duplicate reads in files #####
@@ -237,13 +241,13 @@ echo "Alignment complete. Marking duplicate reads"
 picard MarkDuplicates -I "$PICARD_IN_T" --QUIET true \
     -M ChIP2MACS2/"$BNAME"/picard/treatment/"$BNAME".duplicationMetrics \
     -O ChIP2MACS2/"$BNAME"/picard/treatment/"$BNAME".marked_duplicates.bam &&
-sort_and_index ChIP2MACS2/"$BNAME"/picard/treatment/"$BNAME".marked_duplicates.bam &
+samtools index -@ $CORES -bo ChIP2MACS2/"$BNAME"/picard/treatment/"$BNAME".marked_duplicates.bai ChIP2MACS2/"$BNAME"/picard/treatment/"$BNAME".marked_duplicates.bam &
 
 if [[ "${CONTROL[0]}" != *.bam && $NOCONTROL == false ]]; then 
     picard MarkDuplicates -I "$PICARD_IN_C" --QUIET true \
         -M ChIP2MACS2/"$BNAME"/picard/controls/"$BNAME".duplicationMetrics \
         -O ChIP2MACS2/"$BNAME"/picard/controls/"$BNAME".marked_duplicates.bam &&
-    sort_and_index ChIP2MACS2/"$BNAME"/picard/controls/"$BNAME".marked_duplicates.bam ; 
+    samtools index -@ $CORES -bo ChIP2MACS2/"$BNAME"/picard/controls/"$BNAME".marked_duplicates.bai ChIP2MACS2/"$BNAME"/picard/controls/"$BNAME".marked_duplicates.bam ; 
 fi & 
 wait 
 
@@ -265,10 +269,10 @@ elif [[ "${CONTROL[0]}" == *.bam ]]; then MACS2_INPUT="${CONTROL[0]}"
 fi
 
 if [[ $NOCONTROL == true ]]; then 
-    macs2 callpeak -t ChIP2MACS2/"$BNAME"/picard/treatment/"$BNAME".sorted.bam \
+    macs2 callpeak -t ChIP2MACS2/"$BNAME"/picard/treatment/"$BNAME".marked_duplicates.bam \
         -g "$GSIZE" --outdir ChIP2MACS2/"$BNAME"/MACS2/ -n "$BNAME" --call-summits ;
 else
-    macs2 callpeak -t ChIP2MACS2/"$BNAME"/picard/treatment/"$BNAME".sorted.bam -c "$MACS2_INPUT" \
+    macs2 callpeak -t ChIP2MACS2/"$BNAME"/picard/treatment/"$BNAME".marked_duplicates.bam -c "$MACS2_INPUT" \
         -g "$GSIZE" --outdir ChIP2MACS2/"$BNAME"/MACS2/ -n "$BNAME" --call-summits ;
 fi
 
