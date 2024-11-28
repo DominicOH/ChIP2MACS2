@@ -61,6 +61,7 @@ BLACKLIST=""
 GENOME=""
 NOCONTROL=false
 CORES=4
+TRIM_CORES=4
 
 if [[ $# -eq 0 ]]; then 
     usage ;
