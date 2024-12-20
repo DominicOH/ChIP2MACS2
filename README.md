@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/784793987.svg)](https://doi.org/10.5281/zenodo.14535832)
+
 # ChIP2MACS2
 
 This repository contains a short shell pipeline to simplify peak calling from ChIP-seq data. The pipeline is currently as follows: 
