@@ -12,7 +12,7 @@ usage() {
     echo " -x, --index           [REQUIRED] Bowtie2 index path (without tailing .bt.x)"
     echo " -p, --paired          Run in paired-end mode [default: false]"
     echo " -n, --name            A prefix for output files. By default this is the basename of the first treatment file"
-    echo " --gsize               Effective genome size for MACS2. Can be a shortcut [mm | hs] or a number [1.0e+9 | 1000000000] [default: hs]"
+    echo " --gsize               Effective genome size for MACS2. Can be a string shortcut (e.g. 'hs', 'mm') or numeric [1.0e+9 | 1000000000] [default: hs]"
     echo " --blacklist           Blacklist regions [.bed file]. Removed from .bam outputs and ignored in peak calling. Chromosome names must match those in INDEX [default: None]"
     echo " --genome              Required if using --blacklist. TSV format file of chromosome names and sizes. Chromosome names must match those in INDEX. Produced using "
     echo " --keep-intermediates  Whether to retain intermediate alignment files [default: false]"
